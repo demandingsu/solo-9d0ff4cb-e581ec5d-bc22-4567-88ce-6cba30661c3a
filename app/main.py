@@ -1,30 +1,42 @@
 """连锁便利店电价套餐比较 API。
 
-入口：POST /api/v1/compare-plans
-流程：抓取报价站分页列表与套餐详情 -> 地区过滤 -> 资格校验
-（缺费率 / 超已公布档位不得参与）-> 峰谷逐档计费 + 月基本费 -> 年度汇总排序。
-任何列表或详情抓取失败都会记录失败地址，并把最低价结论标记为“待核实”。
+入口：
+- POST /api/v1/compare-plans：抓取报价站分页列表与套餐详情 -> 地区过滤 -> 资格校验
+  （缺费率 / 超已公布档位不得参与）-> 峰谷逐档计费 + 月基本费 -> 年度汇总排序。
+  任何列表或详情抓取失败都会记录失败地址，并把最低价结论标记为“待核实”。
+- POST /api/v1/maintenance-impact：抓取计划检修公告的分页目录与详情，按门店在用线路
+  计算全断电区间；目录或详情失败时相关门店不得判为安全。
 """
 from __future__ import annotations
 
 from fastapi import FastAPI
 
 from .billing import annual_total, bill_plan, check_eligibility
+from .outage import (
+    announcement_summaries,
+    crawl_outage_catalog,
+    evaluate_store,
+    failure_dict,
+    parse_datetime_with_offset,
+    parse_offset,
+)
 from .schemas import (
     CompareRequest,
     CompareResponse,
     CrawlFailureOut,
     ExcludedPlanOut,
     MonthlyBillOut,
+    OutageImpactRequest,
+    OutageImpactResponse,
     RankedPlanOut,
     TierChargeOut,
 )
 from .scraper import crawl_quote_site
 
 app = FastAPI(
-    title="连锁便利店电价套餐比较 API",
-    version="1.0.0",
-    description="按门店峰谷用电预测，比较本地报价站公开电价套餐的年度成本。",
+    title="连锁便利店电价套餐比较与检修影响 API",
+    version="1.1.0",
+    description="比较本地报价站公开电价套餐的年度成本；并依据计划检修公告判定门店全断电时段。",
 )
 
 
@@ -139,4 +151,63 @@ def compare_plans(request: CompareRequest) -> CompareResponse:
         ranked_plans=ranked,
         excluded_plans=excluded,
         failures=failures,
+    )
+
+
+@app.post("/api/v1/maintenance-impact", response_model=OutageImpactResponse)
+def maintenance_impact(request: OutageImpactRequest) -> OutageImpactResponse:
+    """按计划检修公告计算各门店的全断电区间与核实状态。"""
+    window_start = parse_datetime_with_offset(request.window_start)
+    window_end = parse_datetime_with_offset(request.window_end)
+    tz = parse_offset(request.timezone_offset)
+
+    crawl = crawl_outage_catalog(request.catalog_url, timeout=request.timeout_seconds)
+
+    stores = [
+        evaluate_store(
+            store_id=store.store_id,
+            store_name=store.store_name,
+            active_lines=store.active_lines,
+            crawl=crawl,
+            window_start=window_start,
+            window_end=window_end,
+            tz=tz,
+        )
+        for store in request.stores
+    ]
+
+    all_failures = [failure_dict(failure) for failure in crawl.failures]
+    summaries = announcement_summaries(crawl)
+    return OutageImpactResponse(
+        catalog_url=request.catalog_url,
+        window_start=request.window_start,
+        window_end=request.window_end,
+        timezone_offset=request.timezone_offset,
+        catalog={
+            "visited_catalog_urls": crawl.visited_catalog_urls,
+            "announcements_found": len(crawl.entries),
+            "announcements_parsed": len(
+                [item for item in summaries if item["detail_status"] == "ok"]
+            ),
+            "catalog_complete": crawl.catalog_complete,
+            "outage_records": len(crawl.outages),
+            "failure_count": len(all_failures),
+        },
+        announcements=summaries,
+        stores=[
+            {
+                "store_id": store.store_id,
+                "store_name": store.store_name,
+                "active_lines": store.active_lines,
+                "status": store.status,
+                "is_safe": store.is_safe,
+                "verification_complete": store.verification_complete,
+                "note": store.note,
+                "full_outage_intervals": store.full_outage_intervals,
+                "line_outages": store.line_outages,
+                "failures": [failure_dict(failure) for failure in store.failures],
+            }
+            for store in stores
+        ],
+        failures=all_failures,
     )

@@ -1,0 +1,33 @@
+{
+  "catalog_url": "http://outage-site/index.html",
+  "window_start": "2026-11-14T00:00:00+08:00",
+  "window_end": "2026-11-17T00:00:00+08:00",
+  "timezone_offset": "+08:00",
+  "stores": [
+    {
+      "store_id": "S1",
+      "store_name": "城东一店",
+      "active_lines": ["L-101", "L-102"]
+    },
+    {
+      "store_id": "S2",
+      "store_name": "城东二店",
+      "active_lines": ["L-101", "L-103"]
+    },
+    {
+      "store_id": "S3",
+      "store_name": "城北三店",
+      "active_lines": ["L-102", "L-104"]
+    },
+    {
+      "store_id": "S4",
+      "store_name": "城东便利店（单线供电）",
+      "active_lines": ["L-101"]
+    },
+    {
+      "store_id": "S5",
+      "store_name": "城南四店（不涉及本次检修）",
+      "active_lines": ["L-201"]
+    }
+  ]
+}
